@@ -10,17 +10,10 @@ import (
 	"os"
 	"time"
 
-	// ** UPDATED Import path for Dialogflow CX client **
-	cx "cloud.google.com/go/dialogflow/cx/apiv3" // Use v3 (GA) instead of v3beta1 if possible
-	// "github.com/google/uuid"
-	"github.com/rs/cors" // For CORS handling
-	// ** UPDATED Import path for Dialogflow CX protobuf types **
+	cx "cloud.google.com/go/dialogflow/cx/apiv3"
+	"github.com/rs/cors"
 	cxpb "google.golang.org/genproto/googleapis/cloud/dialogflow/cx/v3"
-
-	// ** ADDED IMPORT for client options **
 	"google.golang.org/api/option"
-	// structpb is usually needed for parameters, keeping it for now
-	// structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 // Configuration struct to hold environment variables
@@ -29,28 +22,25 @@ type config struct {
 	LocationID    string
 	AllowedOrigin string
 	Port          string
-	// Optional: Default Agent ID if not provided in request
 	DefaultAgentID string
 }
 
 // Request struct matching the expected JSON body from the client
 type DetectIntentRequest struct {
 	Message      string `json:"message"`
-	AgentID      string `json:"agentId"`      // CX requires Agent ID for session path
-	SessionID    string `json:"sessionId"`    // CX requires Session ID
-	LanguageCode string `json:"languageCode"` // Optional language code
+	AgentID      string `json:"agentId"`     
+	SessionID    string `json:"sessionId"`   
+	LanguageCode string `json:"languageCode"` 
 }
 
 // Response struct sent back to the client
-// Simplified to match the JS example (returning first text response)
 type DetectIntentResponse struct {
-	Text      string `json:"text"` // Field to hold the extracted text response
+	Text      string `json:"text"` 
 	SessionID string `json:"sessionId"`
 }
 
 var (
 	appConfig config
-	// ** UPDATED Client Type for CX **
 	sessionsClient *cx.SessionsClient
 )
 
@@ -59,7 +49,7 @@ func main() {
 	ctx := context.Background()
 
 	// --- Load Configuration from Environment Variables ---
-	appConfig = loadConfig() // Ensure LocationID and ProjectID are loaded correctly
+	appConfig = loadConfig()
 
 	// --- Initialize Dialogflow CX Client ---
 	// Construct the regional endpoint string based on the LocationID config
@@ -78,7 +68,7 @@ func main() {
 
 	// --- Setup HTTP Server & Routing ---
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/dialogflow/detectIntent", detectIntentHandler) // Keep same endpoint path for now
+	mux.HandleFunc("/api/dialogflow/detectIntent", detectIntentHandler)
 	mux.HandleFunc("/healthz", healthCheckHandler)
 
 	// --- CORS Configuration ---
@@ -112,11 +102,10 @@ func main() {
 func loadConfig() config {
 	cfg := config{
 		ProjectID:     getEnv("DIALOGFLOW_PROJECT_ID", ""),
-		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""), // e.g., "us-central1"
+		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""),
 		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),
 		Port:          getEnv("PORT", "8080"),
-		// Optional: Provide a default agent ID via env var if needed
-		DefaultAgentID: getEnv("DEFAULT_DIALOGFLOW_AGENT_ID", "1891c50e-e0b6-44cc-b1f0-cc7d04bc73b2"), // Example default from JS
+		DefaultAgentID: getEnv("DEFAULT_DIALOGFLOW_AGENT_ID", "1891c50e-e0b6-44cc-b1f0-cc7d04bc73b2"), 
 	}
 	if cfg.ProjectID == "" || cfg.LocationID == "" {
 		log.Fatal("Error: DIALOGFLOW_PROJECT_ID and DIALOGFLOW_LOCATION_ID environment variables must be set.")
@@ -155,7 +144,6 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// --- Input Validation ---
-	// CX requires message, agentId, and sessionId
 	agentID := req.AgentID
 	if agentID == "" {
 		agentID = appConfig.DefaultAgentID // Use default if not provided
@@ -170,16 +158,12 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	// --- Language Code ---
 	langCode := req.LanguageCode
 	if langCode == "" {
-		langCode = "en" // Default language code from JS example
+		langCode = "en"
 	}
 
 	// --- Construct Dialogflow CX Request ---
-	// ** UPDATED Session Path construction for CX **
-	// Format: projects/<Project ID>/locations/<Location ID>/agents/<Agent ID>/sessions/<Session ID>
 	sessionPath := fmt.Sprintf("projects/%s/locations/%s/agents/%s/sessions/%s",
 		appConfig.ProjectID, appConfig.LocationID, agentID, sessionID)
-	// The CX client library also has a helper:
-	// sessionPath = sessionsClient.SessionPath(appConfig.ProjectID, appConfig.LocationID, agentID, sessionID)
 
 	log.Printf("Sending CX request to Dialogflow: Path=%s, Lang=%s, Message=%q",
 		sessionPath, langCode, req.Message)
@@ -195,8 +179,6 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			LanguageCode: langCode,
 		},
-		// Optional: Add QueryParams if needed for CX
-		// QueryParams: &cxpb.QueryParameters{...},
 	}
 
 	// --- Send Request to Dialogflow CX ---
@@ -235,7 +217,6 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 
 	if responseText == "" {
 		log.Printf("Warning: No text response found in Dialogflow CX result.")
-		// You might want to return a default message or handle other response types
 	}
 
 	log.Printf("Received response from Dialogflow CX: Fulfillment=%q", responseText)
@@ -243,7 +224,7 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	// ** UPDATED Response format **
 	apiResponse := DetectIntentResponse{
 		Text:      responseText,
-		SessionID: sessionID, // Return session ID used
+		SessionID: sessionID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
