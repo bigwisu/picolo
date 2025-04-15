@@ -1,3 +1,4 @@
+// main.go
 package main
 
 import (
@@ -9,12 +10,16 @@ import (
 	"os"
 	"time"
 
+	// ** REVERTED Import path for Dialogflow client **
 	dialogflow "cloud.google.com/go/dialogflow/apiv2"
 	"github.com/google/uuid"
 	"github.com/rs/cors" // For CORS handling
 	dialogflowpb "google.golang.org/genproto/googleapis/cloud/dialogflow/v2"
-	// ADC is implicitly used when no explicit credentials are provided
-	// "google.golang.org/api/option"
+
+	// ** ADDED IMPORT for client options **
+	"google.golang.org/api/option"
+
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 // Configuration struct to hold environment variables
@@ -28,22 +33,23 @@ type config struct {
 // Request struct matching the expected JSON body from the client
 type DetectIntentRequest struct {
 	Message      string `json:"message"`
-	AgentID      string `json:"agentId"` // Note: AgentID isn't directly used in V2 DetectIntent path, but kept for consistency with Node example
-	SessionID    string `json:"sessionId"`    // Optional session ID from client
-	LanguageCode string `json:"languageCode"` // Optional language code
+	AgentID      string `json:"agentId"`
+	SessionID    string `json:"sessionId"`
+	LanguageCode string `json:"languageCode"`
 }
 
 // Response struct sent back to the client
 type DetectIntentResponse struct {
-	FulfillmentText     string                              `json:"fulfillmentText"`
-	FulfillmentMessages []*dialogflowpb.ResponseMessage `json:"fulfillmentMessages"`
-	Intent              string                              `json:"intent"`
-	Parameters          *dialogflowpb.Struct                `json:"parameters"`
-	SessionID           string                              `json:"sessionId"` // The session ID used for the request
+	FulfillmentText     string                           `json:"fulfillmentText"`
+	FulfillmentMessages []*dialogflowpb.Intent_Message `json:"fulfillmentMessages"`
+	Intent              string                           `json:"intent"`
+	Parameters          *structpb.Struct                 `json:"parameters"`
+	SessionID           string                           `json:"sessionId"`
 }
 
 var (
 	appConfig     config
+	// ** REVERTED Client Type ** (Matches reverted import)
 	sessionsClient *dialogflow.SessionsClient
 )
 
@@ -52,16 +58,16 @@ func main() {
 	ctx := context.Background()
 
 	// --- Load Configuration from Environment Variables ---
-	appConfig = loadConfig()
+	appConfig = loadConfig() // Ensure LocationID is loaded correctly
 
 	// --- Initialize Dialogflow Client ---
-	// When running on Google Cloud (like Cloud Run), ADC are used automatically.
-	// No need to explicitly provide credentials file path in most cases.
-	// If running locally and GOOGLE_APPLICATION_CREDENTIALS is set, it will use that.
-	// Set the correct API endpoint if not global (common for newer agents)
-	// endpoint := fmt.Sprintf("%s-dialogflow.googleapis.com:443", appConfig.LocationID)
-	// sessionsClient, err = dialogflow.NewSessionsClient(ctx, option.WithEndpoint(endpoint))
-	sessionsClient, err = dialogflow.NewSessionsClient(ctx) // Simpler initialization often works
+	// ** UPDATED Client Initialization to specify regional endpoint **
+	// Ensure GOOGLE_APPLICATION_CREDENTIALS is set for local dev, or running on GCP.
+	// Construct the regional endpoint string based on the LocationID config
+	regionalEndpoint := fmt.Sprintf("%s-dialogflow.googleapis.com:443", appConfig.LocationID)
+	log.Printf("Using Dialogflow regional endpoint: %s", regionalEndpoint)
+
+	sessionsClient, err = dialogflow.NewSessionsClient(ctx, option.WithEndpoint(regionalEndpoint))
 	if err != nil {
 		log.Fatalf("Failed to create Dialogflow sessions client: %v", err)
 	}
@@ -72,18 +78,17 @@ func main() {
 	// --- Setup HTTP Server & Routing ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/dialogflow/detectIntent", detectIntentHandler)
-	mux.HandleFunc("/healthz", healthCheckHandler) // Basic health check
+	mux.HandleFunc("/healthz", healthCheckHandler)
 
 	// --- CORS Configuration ---
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{appConfig.AllowedOrigin}, // Use configured origin
+		AllowedOrigins: []string{appConfig.AllowedOrigin},
 		AllowedMethods: []string{"POST", "OPTIONS"},
-		AllowedHeaders: []string{"Content-Type", "Authorization"}, // Adjust as needed
-		// AllowCredentials: true, // Set to true if you need cookies/auth headers
-		OptionsPassthrough: false, // Let CORS handle OPTIONS
-		Debug:              os.Getenv("CORS_DEBUG") == "true", // Enable debug logging if needed
+		AllowedHeaders: []string{"Content-Type", "Authorization"},
+		OptionsPassthrough: false,
+		Debug:              os.Getenv("CORS_DEBUG") == "true",
 	})
-	handler := c.Handler(mux) // Wrap mux with CORS middleware
+	handler := c.Handler(mux)
 
 	// --- Start Server ---
 	log.Printf("Server starting on port %s", appConfig.Port)
@@ -91,7 +96,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         ":" + appConfig.Port,
-		Handler:      handler, // Use the CORS-wrapped handler
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -105,10 +110,10 @@ func main() {
 // Loads configuration from environment variables with defaults
 func loadConfig() config {
 	cfg := config{
-		ProjectID:     getEnv("DIALOGFLOW_PROJECT_ID", ""), // Must be set
-		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""), // Must be set
-		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),       // Default to allow all for dev, restrict in prod
-		Port:          getEnv("PORT", "8080"),            // Default for Cloud Run
+		ProjectID:     getEnv("DIALOGFLOW_PROJECT_ID", ""),
+		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""), // Make sure this is set correctly (e.g., "us-central1")
+		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),
+		Port:          getEnv("PORT", "8080"),
 	}
 	if cfg.ProjectID == "" || cfg.LocationID == "" {
 		log.Fatal("Error: DIALOGFLOW_PROJECT_ID and DIALOGFLOW_LOCATION_ID environment variables must be set.")
@@ -156,21 +161,19 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	// --- Session Management ---
 	sessionID := req.SessionID
 	if sessionID == "" {
-		sessionID = uuid.NewString() // Generate new session ID if client didn't provide one
+		sessionID = uuid.NewString()
 	}
 
 	// --- Language Code ---
 	langCode := req.LanguageCode
 	if langCode == "" {
-		langCode = "en-US" // Default language code if not provided
+		langCode = "en-US" // Default language code
 	}
 
 	// --- Construct Dialogflow Request ---
-	// Format: projects/<Project ID>/locations/<Location ID>/agent/sessions/<Session ID>
+	// Session path format is correct for regionalized agents when client uses correct endpoint
 	sessionPath := fmt.Sprintf("projects/%s/locations/%s/agent/sessions/%s", appConfig.ProjectID, appConfig.LocationID, sessionID)
 
-	// Note: AgentID from the request is logged but not part of the session path itself in V2 API.
-	// It might be used if passed via queryParams or for other backend logic.
 	log.Printf("Sending request to Dialogflow: Project=%s, Location=%s, Session=%s, AgentID=%s, Lang=%s, Message=%q",
 		appConfig.ProjectID, appConfig.LocationID, sessionID, req.AgentID, langCode, req.Message)
 
@@ -184,16 +187,16 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		},
-		// Optional: Add QueryParams if needed
-		// QueryParams: &dialogflowpb.QueryParameters{...},
 	}
 
 	// --- Send Request to Dialogflow ---
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second) // Add timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	// The sessionsClient is now configured with the regional endpoint
 	response, err := sessionsClient.DetectIntent(ctx, dialogflowRequest)
 	if err != nil {
+		// Log the specific gRPC error if possible
 		log.Printf("Error calling Dialogflow DetectIntent: %v", err)
 		http.Error(w, fmt.Sprintf("Dialogflow API error: %v", err), http.StatusInternalServerError)
 		return
@@ -207,21 +210,20 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Received response from Dialogflow: Intent=%s, Fulfillment=%q", result.Intent.GetDisplayName(), result.FulfillmentText)
+	log.Printf("Received response from Dialogflow: Intent=%s, Fulfillment=%q", result.GetIntent().GetDisplayName(), result.FulfillmentText)
 
 	apiResponse := DetectIntentResponse{
 		FulfillmentText:     result.FulfillmentText,
-		FulfillmentMessages: result.FulfillmentMessages,
-		Intent:              result.Intent.GetDisplayName(),
-		Parameters:          result.Parameters,
-		SessionID:           sessionID, // Return the session ID used
+		FulfillmentMessages: result.GetFulfillmentMessages(),
+		Intent:              result.GetIntent().GetDisplayName(),
+		Parameters:          result.GetParameters(),
+		SessionID:           sessionID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(apiResponse); err != nil {
 		log.Printf("Error encoding response: %v", err)
-		// Attempt to send a plain text error if JSON encoding fails
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }

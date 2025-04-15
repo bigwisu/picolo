@@ -3,7 +3,7 @@
 # --- Build Stage ---
 # Use an official Go image as the build environment.
 # Specify the Go version matching your go.mod file.
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # Set the working directory inside the container
 WORKDIR /app

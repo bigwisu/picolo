@@ -10,7 +10,7 @@ steps:
       [
         'build',
         '-t',
-        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:$COMMIT_SHA',
+        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:latest',
         '.', # Build context is the current directory
       ]
     id: Build
@@ -21,7 +21,7 @@ steps:
     args:
       [
         'push',
-        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:$BUILD_ID',
+        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:latest',
       ]
     id: Push
 
@@ -36,7 +36,7 @@ steps:
         'deploy',
         '${_SERVICE_NAME}', # Name of the Cloud Run service
         '--image',
-        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:$BUILD_ID',
+        '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:latest',
         '--region',
         '${_LOCATION}', # Region for Cloud Run service
         '--platform',
@@ -46,10 +46,8 @@ steps:
         '--allow-unauthenticated', # Or use '--no-allow-unauthenticated' and configure IAM/IAP
         '--set-env-vars',
         # Pass environment variables required by the Go application
-        # Make sure these values are appropriate for your production environment
-        'DIALOGFLOW_PROJECT_ID=${_DIALOGFLOW_PROJECT_ID}',
-        'DIALOGFLOW_LOCATION_ID=${_DIALOGFLOW_LOCATION_ID}',
-        'ALLOWED_ORIGIN=${_ALLOWED_ORIGIN}', # e.g., '[https://your-frontend-domain.com](https://your-frontend-domain.com)'
+        # Combine all environment variables into ONE comma-separated string below
+        'DIALOGFLOW_PROJECT_ID=${_DIALOGFLOW_PROJECT_ID},DIALOGFLOW_LOCATION_ID=${_DIALOGFLOW_LOCATION_ID},ALLOWED_ORIGIN=${_ALLOWED_ORIGIN}',
         # Add other necessary environment variables here
         # 'EXAMPLE_VAR=example_value'
       ]
@@ -57,14 +55,14 @@ steps:
 
 # Define the image tag used for deployment
 images:
-  - '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:$COMMIT_SHA'
+  - '${_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REPO}/${_SERVICE_NAME}:latest'
 
 # Define default substitutions (can be overridden at build time)
 substitutions:
   _SERVICE_NAME: 'dialogflow-proxy' # Your desired Cloud Run service name
   _LOCATION: 'us-central1'         # The region for Artifact Registry and Cloud Run
-  _ARTIFACT_REPO: 'cloudrun-repo'  # Your Artifact Registry repository name
-  _DIALOGFLOW_PROJECT_ID: 'your-dialogflow-project-id' # Your Dialogflow Project ID
+  _ARTIFACT_REPO: 'picolo'  # Your Artifact Registry repository name
+  _DIALOGFLOW_PROJECT_ID: 'batagor' # Your Dialogflow Project ID
   _DIALOGFLOW_LOCATION_ID: 'us-central1'              # Your Dialogflow Agent Location
   _ALLOWED_ORIGIN: '*'             # IMPORTANT: Change to your frontend URL for production! '*' is insecure.
 
