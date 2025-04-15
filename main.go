@@ -10,16 +10,17 @@ import (
 	"os"
 	"time"
 
-	// ** REVERTED Import path for Dialogflow client **
-	dialogflow "cloud.google.com/go/dialogflow/apiv2"
-	"github.com/google/uuid"
+	// ** UPDATED Import path for Dialogflow CX client **
+	cx "cloud.google.com/go/dialogflow/cx/apiv3" // Use v3 (GA) instead of v3beta1 if possible
+	// "github.com/google/uuid"
 	"github.com/rs/cors" // For CORS handling
-	dialogflowpb "google.golang.org/genproto/googleapis/cloud/dialogflow/v2"
+	// ** UPDATED Import path for Dialogflow CX protobuf types **
+	cxpb "google.golang.org/genproto/googleapis/cloud/dialogflow/cx/v3"
 
 	// ** ADDED IMPORT for client options **
 	"google.golang.org/api/option"
-
-	structpb "google.golang.org/protobuf/types/known/structpb"
+	// structpb is usually needed for parameters, keeping it for now
+	// structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 // Configuration struct to hold environment variables
@@ -28,29 +29,29 @@ type config struct {
 	LocationID    string
 	AllowedOrigin string
 	Port          string
+	// Optional: Default Agent ID if not provided in request
+	DefaultAgentID string
 }
 
 // Request struct matching the expected JSON body from the client
 type DetectIntentRequest struct {
 	Message      string `json:"message"`
-	AgentID      string `json:"agentId"`
-	SessionID    string `json:"sessionId"`
-	LanguageCode string `json:"languageCode"`
+	AgentID      string `json:"agentId"`      // CX requires Agent ID for session path
+	SessionID    string `json:"sessionId"`    // CX requires Session ID
+	LanguageCode string `json:"languageCode"` // Optional language code
 }
 
 // Response struct sent back to the client
+// Simplified to match the JS example (returning first text response)
 type DetectIntentResponse struct {
-	FulfillmentText     string                           `json:"fulfillmentText"`
-	FulfillmentMessages []*dialogflowpb.Intent_Message `json:"fulfillmentMessages"`
-	Intent              string                           `json:"intent"`
-	Parameters          *structpb.Struct                 `json:"parameters"`
-	SessionID           string                           `json:"sessionId"`
+	Text      string `json:"text"` // Field to hold the extracted text response
+	SessionID string `json:"sessionId"`
 }
 
 var (
-	appConfig     config
-	// ** REVERTED Client Type ** (Matches reverted import)
-	sessionsClient *dialogflow.SessionsClient
+	appConfig config
+	// ** UPDATED Client Type for CX **
+	sessionsClient *cx.SessionsClient
 )
 
 func main() {
@@ -58,26 +59,26 @@ func main() {
 	ctx := context.Background()
 
 	// --- Load Configuration from Environment Variables ---
-	appConfig = loadConfig() // Ensure LocationID is loaded correctly
+	appConfig = loadConfig() // Ensure LocationID and ProjectID are loaded correctly
 
-	// --- Initialize Dialogflow Client ---
-	// ** UPDATED Client Initialization to specify regional endpoint **
-	// Ensure GOOGLE_APPLICATION_CREDENTIALS is set for local dev, or running on GCP.
+	// --- Initialize Dialogflow CX Client ---
 	// Construct the regional endpoint string based on the LocationID config
+	// CX uses the same regional endpoint format as ES
 	regionalEndpoint := fmt.Sprintf("%s-dialogflow.googleapis.com:443", appConfig.LocationID)
-	log.Printf("Using Dialogflow regional endpoint: %s", regionalEndpoint)
+	log.Printf("Using Dialogflow CX regional endpoint: %s", regionalEndpoint)
 
-	sessionsClient, err = dialogflow.NewSessionsClient(ctx, option.WithEndpoint(regionalEndpoint))
+	// ** UPDATED Client Initialization for CX **
+	sessionsClient, err = cx.NewSessionsClient(ctx, option.WithEndpoint(regionalEndpoint))
 	if err != nil {
-		log.Fatalf("Failed to create Dialogflow sessions client: %v", err)
+		log.Fatalf("Failed to create Dialogflow CX sessions client: %v", err)
 	}
 	defer sessionsClient.Close()
 
-	log.Printf("Dialogflow client initialized for project %s, location %s", appConfig.ProjectID, appConfig.LocationID)
+	log.Printf("Dialogflow CX client initialized for project %s, location %s", appConfig.ProjectID, appConfig.LocationID)
 
 	// --- Setup HTTP Server & Routing ---
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/dialogflow/detectIntent", detectIntentHandler)
+	mux.HandleFunc("/api/dialogflow/detectIntent", detectIntentHandler) // Keep same endpoint path for now
 	mux.HandleFunc("/healthz", healthCheckHandler)
 
 	// --- CORS Configuration ---
@@ -111,9 +112,11 @@ func main() {
 func loadConfig() config {
 	cfg := config{
 		ProjectID:     getEnv("DIALOGFLOW_PROJECT_ID", ""),
-		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""), // Make sure this is set correctly (e.g., "us-central1")
+		LocationID:    getEnv("DIALOGFLOW_LOCATION_ID", ""), // e.g., "us-central1"
 		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),
 		Port:          getEnv("PORT", "8080"),
+		// Optional: Provide a default agent ID via env var if needed
+		DefaultAgentID: getEnv("DEFAULT_DIALOGFLOW_AGENT_ID", "1891c50e-e0b6-44cc-b1f0-cc7d04bc73b2"), // Example default from JS
 	}
 	if cfg.ProjectID == "" || cfg.LocationID == "" {
 		log.Fatal("Error: DIALOGFLOW_PROJECT_ID and DIALOGFLOW_LOCATION_ID environment variables must be set.")
@@ -135,7 +138,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-// Handles requests to the /api/dialogflow/detectIntent endpoint
+// Handles requests to the /api/dialogflow/detectIntent endpoint for CX
 func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -152,72 +155,95 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// --- Input Validation ---
-	if req.Message == "" || req.AgentID == "" {
-		log.Printf("Validation Error: Missing message or agentId. AgentID received: %s", req.AgentID)
-		http.Error(w, "Missing required fields: message and agentId", http.StatusBadRequest)
-		return
+	// CX requires message, agentId, and sessionId
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = appConfig.DefaultAgentID // Use default if not provided
 	}
-
-	// --- Session Management ---
-	sessionID := req.SessionID
-	if sessionID == "" {
-		sessionID = uuid.NewString()
+	sessionID := req.SessionID // Use session ID from request
+	if req.Message == "" || agentID == "" || sessionID == "" {
+		log.Printf("Validation Error: Missing message, agentId, or sessionId. AgentID used: %s, SessionID: %s", agentID, sessionID)
+		http.Error(w, "Missing required fields: message, agentId, sessionId", http.StatusBadRequest)
+		return
 	}
 
 	// --- Language Code ---
 	langCode := req.LanguageCode
 	if langCode == "" {
-		langCode = "en-US" // Default language code
+		langCode = "en" // Default language code from JS example
 	}
 
-	// --- Construct Dialogflow Request ---
-	// Session path format is correct for regionalized agents when client uses correct endpoint
-	sessionPath := fmt.Sprintf("projects/%s/locations/%s/agent/sessions/%s", appConfig.ProjectID, appConfig.LocationID, sessionID)
+	// --- Construct Dialogflow CX Request ---
+	// ** UPDATED Session Path construction for CX **
+	// Format: projects/<Project ID>/locations/<Location ID>/agents/<Agent ID>/sessions/<Session ID>
+	sessionPath := fmt.Sprintf("projects/%s/locations/%s/agents/%s/sessions/%s",
+		appConfig.ProjectID, appConfig.LocationID, agentID, sessionID)
+	// The CX client library also has a helper:
+	// sessionPath = sessionsClient.SessionPath(appConfig.ProjectID, appConfig.LocationID, agentID, sessionID)
 
-	log.Printf("Sending request to Dialogflow: Project=%s, Location=%s, Session=%s, AgentID=%s, Lang=%s, Message=%q",
-		appConfig.ProjectID, appConfig.LocationID, sessionID, req.AgentID, langCode, req.Message)
+	log.Printf("Sending CX request to Dialogflow: Path=%s, Lang=%s, Message=%q",
+		sessionPath, langCode, req.Message)
 
-	dialogflowRequest := &dialogflowpb.DetectIntentRequest{
+	// ** UPDATED Request struct for CX **
+	dialogflowRequest := &cxpb.DetectIntentRequest{
 		Session: sessionPath,
-		QueryInput: &dialogflowpb.QueryInput{
-			Input: &dialogflowpb.QueryInput_Text{
-				Text: &dialogflowpb.TextInput{
-					Text:         req.Message,
-					LanguageCode: langCode,
+		QueryInput: &cxpb.QueryInput{
+			Input: &cxpb.QueryInput_Text{
+				Text: &cxpb.TextInput{
+					Text: req.Message,
 				},
 			},
+			LanguageCode: langCode,
 		},
+		// Optional: Add QueryParams if needed for CX
+		// QueryParams: &cxpb.QueryParameters{...},
 	}
 
-	// --- Send Request to Dialogflow ---
+	// --- Send Request to Dialogflow CX ---
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// The sessionsClient is now configured with the regional endpoint
+	// ** UPDATED API call for CX **
 	response, err := sessionsClient.DetectIntent(ctx, dialogflowRequest)
 	if err != nil {
-		// Log the specific gRPC error if possible
-		log.Printf("Error calling Dialogflow DetectIntent: %v", err)
-		http.Error(w, fmt.Sprintf("Dialogflow API error: %v", err), http.StatusInternalServerError)
+		log.Printf("Error calling Dialogflow CX DetectIntent: %v", err)
+		http.Error(w, fmt.Sprintf("Dialogflow CX API error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// --- Process and Return Response ---
-	result := response.GetQueryResult()
-	if result == nil {
-		log.Printf("Error: Dialogflow response missing query result.")
-		http.Error(w, "Dialogflow returned empty result", http.StatusInternalServerError)
+	// --- Process and Return Response (Simplified like JS example) ---
+	queryResult := response.GetQueryResult()
+	if queryResult == nil {
+		log.Printf("Error: Dialogflow CX response missing query result.")
+		http.Error(w, "Dialogflow CX returned empty result", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Received response from Dialogflow: Intent=%s, Fulfillment=%q", result.GetIntent().GetDisplayName(), result.FulfillmentText)
+	responseText := ""
+	// Extract the first text response message, similar to the JS example
+	responseMessages := queryResult.GetResponseMessages()
+	if len(responseMessages) > 0 {
+		// Check if the first message is a text message
+		if textMessage := responseMessages[0].GetText(); textMessage != nil {
+			// Get the list of texts (usually just one)
+			texts := textMessage.GetText()
+			if len(texts) > 0 {
+				responseText = texts[0]
+			}
+		}
+	}
 
+	if responseText == "" {
+		log.Printf("Warning: No text response found in Dialogflow CX result.")
+		// You might want to return a default message or handle other response types
+	}
+
+	log.Printf("Received response from Dialogflow CX: Fulfillment=%q", responseText)
+
+	// ** UPDATED Response format **
 	apiResponse := DetectIntentResponse{
-		FulfillmentText:     result.FulfillmentText,
-		FulfillmentMessages: result.GetFulfillmentMessages(),
-		Intent:              result.GetIntent().GetDisplayName(),
-		Parameters:          result.GetParameters(),
-		SessionID:           sessionID,
+		Text:      responseText,
+		SessionID: sessionID, // Return session ID used
 	}
 
 	w.Header().Set("Content-Type", "application/json")
