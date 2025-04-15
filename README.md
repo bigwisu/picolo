@@ -48,3 +48,36 @@ Configure via environment variables:
 * **`POST /api/dialogflow/detectIntent`**
     * **Body (JSON):** Requires `message` (string), `agentId` (string, optional if default set), `sessionId` (string). `languageCode` (string) is optional.
     * **Response (JSON):** Contains `text` (string) with the bot's reply and `sessionId` (string).
+
+### Example `curl` Command
+
+Replace `YOUR_SERVICE_URL` with the URL provided by Cloud Run.
+
+```bash
+# Set your service URL
+SERVICE_URL="YOUR_SERVICE_URL"
+
+# Example request data
+JSON_PAYLOAD='{
+  "message": "Hello",
+  "agentId": "your-agent-id", # Optional if DEFAULT_DIALOGFLOW_AGENT_ID is set
+  "sessionId": "some-unique-session-id-123",
+  "languageCode": "en" # Optional
+}'
+
+# Make the request (unauthenticated)
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d "${JSON_PAYLOAD}" \
+  "${SERVICE_URL}/api/dialogflow/detectIntent"
+
+# --- OR ---
+
+# Make the request (authenticated)
+# First, get token: export ID_TOKEN=$(gcloud auth print-identity-token)
+# Then add header: -H "Authorization: Bearer ${ID_TOKEN}"
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d "${JSON_PAYLOAD}" \
+  "${SERVICE_URL}/api/dialogflow/detectIntent"
