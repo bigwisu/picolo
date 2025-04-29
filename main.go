@@ -27,16 +27,17 @@ type config struct {
 
 // Request struct matching the expected JSON body from the client
 type DetectIntentRequest struct {
-	Message      string `json:"message"`
-	AgentID      string `json:"agentId"`     
-	SessionID    string `json:"sessionId"`   
-	LanguageCode string `json:"languageCode"` 
+	Message      string `json:"message"`      // User's message
+	AgentID      string `json:"agentId"`      // Optional: Specific agent ID to use
+	SessionID    string `json:"sessionId"`    // Unique ID for the conversation session
+	LanguageCode string `json:"languageCode"` // Optional: Language code (e.g., "en")
 }
 
 // Response struct sent back to the client
 type DetectIntentResponse struct {
-	Text      string `json:"text"` 
-	SessionID string `json:"sessionId"`
+	Text       string                 `json:"text"`       // Fulfillment text from Dialogflow
+	SessionID  string                 `json:"sessionId"`  // Session ID used
+	Parameters map[string]interface{} `json:"parameters"` // Parameters extracted by Dialogflow
 }
 
 var (
@@ -219,12 +220,21 @@ func detectIntentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: No text response found in Dialogflow CX result.")
 	}
 
+	// --- Extract Parameters ---
+	var parameters map[string]interface{}
+	if queryResult.GetParameters() != nil {
+		parameters = queryResult.GetParameters().AsMap()
+		log.Printf("Dialogflow CX Parameters: %v", parameters)
+	} else {
+		log.Printf("No parameters found in Dialogflow CX result.")
+	}
 	log.Printf("Received response from Dialogflow CX: Fulfillment=%q", responseText)
 
 	// ** UPDATED Response format **
 	apiResponse := DetectIntentResponse{
 		Text:      responseText,
 		SessionID: sessionID,
+		Parameters: parameters, // Include extracted parameters
 	}
 
 	w.Header().Set("Content-Type", "application/json")
